@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+# Keep environment variables out of version control (but keep .env.example checked in)
+.env
+.env.test
+.env.local
+.env.production
+
+/generated/prisma

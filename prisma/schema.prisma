@@ -1,0 +1,777 @@
+// Prisma schema — grows module-by-module per docs/24-ROADMAP.md. Currently covers Identity &
+// Access (Phase 1/2) and Catalog foundation + Media (Phase 3). Full target schema (all ~55
+// tables) is documented at docs/06-PRISMA-SCHEMA.md. Category/Brand deliberately omit their
+// `products Product[]` back-relation until Phase 4 adds the Product model itself.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Prisma 7: the connection URL lives in prisma.config.ts (CLI/migrations) and is
+// passed to PrismaClient via a driver adapter at runtime (see src/prisma/prisma.service.ts).
+datasource db {
+  provider = "postgresql"
+}
+
+// =========================================================================
+// ENUMS
+// =========================================================================
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  INVENTORY_MANAGER
+  SALES_MANAGER
+  ORDER_MANAGER
+  CUSTOMER_SUPPORT
+  MARKETING
+  CUSTOMER
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  BANNED
+  PENDING_VERIFICATION
+}
+
+enum AddressType {
+  SHIPPING
+  BILLING
+}
+
+enum ProductStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum MediaType {
+  IMAGE
+  DOCUMENT
+  VIDEO
+}
+
+enum StockMovementType {
+  PURCHASE_IN
+  SALE_OUT
+  RESERVATION
+  RELEASE_RESERVATION
+  ADJUSTMENT
+  DAMAGE
+  RETURN_IN
+  TRANSFER_IN
+  TRANSFER_OUT
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  ORDERED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+enum ProductRelationType {
+  RELATED
+  CROSS_SELL
+  UP_SELL
+}
+
+// Full state machine per docs/13-ORDER-FLOW.md; only the subset reachable from PENDING through
+// DELIVERED/CANCELLED is enforced by OrdersService.transition() in Phase 5 — the remaining
+// values (RETURN_REQUESTED onward) are reserved for the Returns phase so this enum won't need
+// a breaking migration when that phase lands.
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PACKED
+  READY_TO_SHIP
+  SHIPPED
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+  RETURN_REQUESTED
+  RETURNED
+  REFUNDED
+  EXCHANGE_REQUESTED
+  EXCHANGED
+}
+
+// RAZORPAY is reserved for the Payments phase — Phase 5 checkout only ever sets COD.
+enum PaymentMethod {
+  RAZORPAY
+  COD
+}
+
+// Only HOME_MIDDLE is rendered by the storefront today (the promo banner row on the home
+// page) — the rest are reserved per docs/06-PRISMA-SCHEMA.md so admins can prep banners for
+// other placements before those sections are built.
+enum BannerPosition {
+  HOME_TOP
+  HOME_MIDDLE
+  CATEGORY_TOP
+  SIDEBAR
+  CHECKOUT
+}
+
+// =========================================================================
+// IDENTITY & ACCESS
+// =========================================================================
+
+model User {
+  id                 String     @id @default(uuid()) @db.Uuid
+  email              String     @unique
+  phone              String?    @unique
+  passwordHash       String
+  firstName          String
+  lastName           String
+  avatarPath         String?
+  role               UserRole   @default(CUSTOMER)
+  status             UserStatus @default(PENDING_VERIFICATION)
+  mustChangePassword Boolean    @default(false)
+  emailVerifiedAt    DateTime?
+  phoneVerifiedAt    DateTime?
+  lastLoginAt        DateTime?
+
+  addresses     Address[]
+  refreshTokens RefreshToken[]
+  permissions   UserPermission[]
+  cart          Cart?
+  orders        Order[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  createdBy String?   @db.Uuid
+  updatedBy String?   @db.Uuid
+  deletedBy String?   @db.Uuid
+
+  @@index([role])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+model RefreshToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @db.Uuid
+  user       User      @relation(fields: [userId], references: [id])
+  tokenHash  String    @unique
+  family     String    @db.Uuid
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  replacedBy String?   @db.Uuid
+  ipAddress  String?
+  userAgent  String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  createdBy String?   @db.Uuid
+  updatedBy String?   @db.Uuid
+  deletedBy String?   @db.Uuid
+
+  @@index([userId])
+  @@index([family])
+  @@map("refresh_tokens")
+}
+
+model Address {
+  id        String      @id @default(uuid()) @db.Uuid
+  userId    String      @db.Uuid
+  user      User        @relation(fields: [userId], references: [id])
+  type      AddressType
+  fullName  String
+  phone     String
+  line1     String
+  line2     String?
+  city      String
+  state     String
+  pincode   String
+  country   String      @default("IN")
+  isDefault Boolean     @default(false)
+
+  orders Order[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  createdBy String?   @db.Uuid
+  updatedBy String?   @db.Uuid
+  deletedBy String?   @db.Uuid
+
+  @@index([userId, type])
+  @@map("addresses")
+}
+
+model Role {
+  id          String           @id @default(uuid()) @db.Uuid
+  name        UserRole         @unique
+  label       String
+  description String?
+  permissions RolePermission[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  createdBy String?   @db.Uuid
+  updatedBy String?   @db.Uuid
+  deletedBy String?   @db.Uuid
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String           @id @default(uuid()) @db.Uuid
+  code        String           @unique
+  module      String
+  action      String
+  description String?
+  roles       RolePermission[]
+  users       UserPermission[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([module])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String     @id @default(uuid()) @db.Uuid
+  roleId       String     @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id])
+  permissionId String     @db.Uuid
+  permission   Permission @relation(fields: [permissionId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserPermission {
+  id           String     @id @default(uuid()) @db.Uuid
+  userId       String     @db.Uuid
+  user         User       @relation(fields: [userId], references: [id])
+  permissionId String     @db.Uuid
+  permission   Permission @relation(fields: [permissionId], references: [id])
+  granted      Boolean    @default(true)
+
+  createdAt DateTime @default(now())
+  createdBy String?  @db.Uuid
+
+  @@unique([userId, permissionId])
+  @@map("user_permissions")
+}
+
+// =========================================================================
+// CATALOG FOUNDATION (Phase 3) — Product/ProductVariant land in Phase 4, at which point
+// Category/Brand gain their `products Product[]` back-relation in the same migration.
+// =========================================================================
+
+model Category {
+  id              String        @id @default(uuid()) @db.Uuid
+  name            String
+  slug            String        @unique
+  description     String?
+  imagePath       String?
+  parentId        String?       @db.Uuid
+  parent          Category?     @relation("CategoryTree", fields: [parentId], references: [id])
+  children        Category[]    @relation("CategoryTree")
+  sortOrder       Int           @default(0)
+  status          ProductStatus @default(PUBLISHED)
+  metaTitle       String?
+  metaDescription String?
+  metaKeywords    String?
+  ogImage         String?
+  canonicalUrl    String?
+
+  products Product[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  createdBy String?   @db.Uuid
+  updatedBy String?   @db.Uuid
+  deletedBy String?   @db.Uuid
+
+  @@index([parentId])
+  @@index([status])
+  @@map("categories")
+}
+
+model Brand {
+  id              String        @id @default(uuid()) @db.Uuid
+  name            String
+  slug            String        @unique
+  description     String?
+  logoPath        String?
+  status          ProductStatus @default(PUBLISHED)
+  metaTitle       String?
+  metaDescription String?
+  metaKeywords    String?
+
+  products Product[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  createdBy String?   @db.Uuid
+  updatedBy String?   @db.Uuid
+  deletedBy String?   @db.Uuid
+
+  @@index([status])
+  @@map("brands")
+}
+
+model Attribute {
+  id     String           @id @default(uuid()) @db.Uuid
+  name   String           @unique
+  values AttributeValue[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@map("attributes")
+}
+
+model AttributeValue {
+  id          String    @id @default(uuid()) @db.Uuid
+  attributeId String    @db.Uuid
+  attribute   Attribute @relation(fields: [attributeId], references: [id])
+  value       String
+  swatchHex   String?
+
+  variantLinks ProductVariantAttributeValue[]
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@unique([attributeId, value])
+  @@map("attribute_values")
+}
+
+model MediaAsset {
+  id           String    @id @default(uuid()) @db.Uuid
+  relativePath String
+  mimeType     String
+  sizeBytes    Int
+  width        Int?
+  height       Int?
+  type         MediaType
+  entityType   String?
+  entityId     String?   @db.Uuid
+  uploadedBy   String?   @db.Uuid
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([entityType, entityId])
+  @@map("media_assets")
+}
+
+// =========================================================================
+// PRODUCTS (Phase 4) — ProductVariant deliberately omits a flashSaleEntries
+// back-relation until FlashSale lands in Phase 7.
+// =========================================================================
+
+model Product {
+  id               String        @id @default(uuid()) @db.Uuid
+  title            String
+  slug             String        @unique
+  description      String?
+  shortDescription String?
+  categoryId       String        @db.Uuid
+  category         Category      @relation(fields: [categoryId], references: [id])
+  brandId          String?       @db.Uuid
+  brand            Brand?        @relation(fields: [brandId], references: [id])
+  status           ProductStatus @default(DRAFT)
+  isTrending       Boolean       @default(false)
+  isFeatured       Boolean       @default(false)
+  isBestSeller     Boolean       @default(false)
+  // Denormalized from active variants' sellingPrice (min), kept in sync by ProductsService on
+  // every variant write — same "ledger + derived balance" pattern as StockItem (docs/14 §1) —
+  // so price filtering/sorting can happen at the DB level without a relation aggregate query.
+  minPrice         Decimal?      @db.Decimal(12, 2)
+  metaTitle        String?
+  metaDescription  String?
+  metaKeywords     String?
+  ogImage          String?
+  canonicalUrl     String?
+
+  images        ProductImage[]
+  variants      ProductVariant[]
+  tags          ProductTag[]
+  relationsFrom ProductRelation[] @relation("ProductRelationSource")
+  relationsTo   ProductRelation[] @relation("ProductRelationTarget")
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  createdBy String?   @db.Uuid
+  updatedBy String?   @db.Uuid
+  deletedBy String?   @db.Uuid
+
+  @@index([categoryId])
+  @@index([brandId])
+  @@index([status, deletedAt])
+  @@index([minPrice])
+  @@map("products")
+}
+
+model ProductImage {
+  id          String  @id @default(uuid()) @db.Uuid
+  productId   String  @db.Uuid
+  product     Product @relation(fields: [productId], references: [id])
+  path        String
+  altText     String?
+  isThumbnail Boolean @default(false)
+  sortOrder   Int     @default(0)
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([productId])
+  @@map("product_images")
+}
+
+model ProductVariant {
+  id           String  @id @default(uuid()) @db.Uuid
+  productId    String  @db.Uuid
+  product      Product @relation(fields: [productId], references: [id])
+  sku          String  @unique
+  barcode      String? @unique
+  mrp          Decimal @db.Decimal(12, 2)
+  sellingPrice Decimal @db.Decimal(12, 2)
+  costPrice    Decimal @db.Decimal(12, 2)
+  gstRatePct   Decimal @default(0) @db.Decimal(5, 2)
+  weightGrams  Int?
+  lengthMm     Int?
+  widthMm      Int?
+  heightMm     Int?
+  isDefault    Boolean @default(true)
+
+  attributeValues    ProductVariantAttributeValue[]
+  stockItems         StockItem[]
+  stockMovements     StockMovement[]
+  purchaseOrderItems PurchaseOrderItem[]
+  cartItems          CartItem[]
+  orderItems         OrderItem[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  createdBy String?   @db.Uuid
+  updatedBy String?   @db.Uuid
+  deletedBy String?   @db.Uuid
+
+  @@index([productId])
+  @@map("product_variants")
+}
+
+model ProductVariantAttributeValue {
+  id               String         @id @default(uuid()) @db.Uuid
+  variantId        String         @db.Uuid
+  variant          ProductVariant @relation(fields: [variantId], references: [id])
+  attributeValueId String         @db.Uuid
+  attributeValue   AttributeValue @relation(fields: [attributeValueId], references: [id])
+
+  @@unique([variantId, attributeValueId])
+  @@map("product_variant_attribute_values")
+}
+
+model Tag {
+  id       String       @id @default(uuid()) @db.Uuid
+  name     String       @unique
+  slug     String       @unique
+  products ProductTag[]
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@map("tags")
+}
+
+model ProductTag {
+  id        String  @id @default(uuid()) @db.Uuid
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id])
+  tagId     String  @db.Uuid
+  tag       Tag     @relation(fields: [tagId], references: [id])
+
+  @@unique([productId, tagId])
+  @@map("product_tags")
+}
+
+model ProductRelation {
+  id        String              @id @default(uuid()) @db.Uuid
+  sourceId  String              @db.Uuid
+  source    Product             @relation("ProductRelationSource", fields: [sourceId], references: [id])
+  targetId  String              @db.Uuid
+  target    Product             @relation("ProductRelationTarget", fields: [targetId], references: [id])
+  type      ProductRelationType
+  sortOrder Int                 @default(0)
+
+  @@unique([sourceId, targetId, type])
+  @@map("product_relations")
+}
+
+// =========================================================================
+// INVENTORY (Phase 4)
+// =========================================================================
+
+model Warehouse {
+  id       String  @id @default(uuid()) @db.Uuid
+  name     String
+  code     String  @unique
+  address  String
+  city     String
+  state    String
+  pincode  String
+  isActive Boolean @default(true)
+
+  stockItems     StockItem[]
+  stockMovements StockMovement[]
+  purchaseOrders PurchaseOrder[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  createdBy String?   @db.Uuid
+  updatedBy String?   @db.Uuid
+  deletedBy String?   @db.Uuid
+
+  @@map("warehouses")
+}
+
+model Supplier {
+  id            String  @id @default(uuid()) @db.Uuid
+  name          String
+  contactPerson String?
+  email         String?
+  phone         String?
+  address       String?
+  gstin         String?
+
+  purchaseOrders PurchaseOrder[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  createdBy String?   @db.Uuid
+  updatedBy String?   @db.Uuid
+  deletedBy String?   @db.Uuid
+
+  @@map("suppliers")
+}
+
+model PurchaseOrder {
+  id          String              @id @default(uuid()) @db.Uuid
+  poNumber    String              @unique
+  supplierId  String              @db.Uuid
+  supplier    Supplier            @relation(fields: [supplierId], references: [id])
+  warehouseId String              @db.Uuid
+  warehouse   Warehouse           @relation(fields: [warehouseId], references: [id])
+  status      PurchaseOrderStatus @default(DRAFT)
+  expectedAt  DateTime?
+  notes       String?
+
+  items PurchaseOrderItem[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  createdBy String?   @db.Uuid
+  updatedBy String?   @db.Uuid
+  deletedBy String?   @db.Uuid
+
+  @@index([supplierId])
+  @@index([warehouseId])
+  @@index([status])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id               String         @id @default(uuid()) @db.Uuid
+  purchaseOrderId  String         @db.Uuid
+  purchaseOrder    PurchaseOrder  @relation(fields: [purchaseOrderId], references: [id])
+  variantId        String         @db.Uuid
+  variant          ProductVariant @relation(fields: [variantId], references: [id])
+  quantityOrdered  Int
+  quantityReceived Int            @default(0)
+  unitCost         Decimal        @db.Decimal(12, 2)
+
+  @@index([purchaseOrderId])
+  @@index([variantId])
+  @@map("purchase_order_items")
+}
+
+model StockItem {
+  id                String         @id @default(uuid()) @db.Uuid
+  variantId         String         @db.Uuid
+  variant           ProductVariant @relation(fields: [variantId], references: [id])
+  warehouseId       String         @db.Uuid
+  warehouse         Warehouse      @relation(fields: [warehouseId], references: [id])
+  quantityOnHand    Int            @default(0)
+  quantityReserved  Int            @default(0)
+  lowStockThreshold Int            @default(5)
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([variantId, warehouseId])
+  @@map("stock_items")
+}
+
+model StockMovement {
+  id            String            @id @default(uuid()) @db.Uuid
+  variantId     String            @db.Uuid
+  variant       ProductVariant    @relation(fields: [variantId], references: [id])
+  warehouseId   String            @db.Uuid
+  warehouse     Warehouse         @relation(fields: [warehouseId], references: [id])
+  type          StockMovementType
+  quantity      Int
+  referenceType String?
+  referenceId   String?
+  note          String?
+
+  createdAt DateTime @default(now())
+  createdBy String?  @db.Uuid
+
+  @@index([variantId, createdAt])
+  @@index([warehouseId])
+  @@index([referenceType, referenceId])
+  @@map("stock_movements")
+}
+
+// =========================================================================
+// CART & ORDERS (Phase 5) — no guest cart (Cart.userId is required, unlike the
+// docs/06-PRISMA-SCHEMA.md draft which supports a guestToken for merge-on-login; the
+// storefront requires login before cart access, so that column is omitted here). Coupon,
+// Payment, Invoice, ReturnRequest, ShippingMethod, TaxRule are deliberately not modeled yet —
+// Order carries their target fields (discountTotal/taxTotal/shippingCharge/paymentMethod) at
+// 0/COD so this shape won't need a breaking migration once those phases land.
+// =========================================================================
+
+model Cart {
+  id     String     @id @default(uuid()) @db.Uuid
+  userId String     @unique @db.Uuid
+  user   User       @relation(fields: [userId], references: [id])
+  items  CartItem[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@map("carts")
+}
+
+model CartItem {
+  id        String         @id @default(uuid()) @db.Uuid
+  cartId    String         @db.Uuid
+  cart      Cart           @relation(fields: [cartId], references: [id])
+  variantId String         @db.Uuid
+  variant   ProductVariant @relation(fields: [variantId], references: [id])
+  quantity  Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([cartId, variantId])
+  @@map("cart_items")
+}
+
+model Order {
+  id                String        @id @default(uuid()) @db.Uuid
+  orderNumber       String        @unique
+  userId            String        @db.Uuid
+  user              User          @relation(fields: [userId], references: [id])
+  shippingAddressId String        @db.Uuid
+  shippingAddress   Address       @relation(fields: [shippingAddressId], references: [id])
+  status            OrderStatus   @default(PENDING)
+  subtotal          Decimal       @db.Decimal(12, 2)
+  discountTotal     Decimal       @default(0) @db.Decimal(12, 2)
+  taxTotal          Decimal       @default(0) @db.Decimal(12, 2)
+  shippingCharge    Decimal       @default(0) @db.Decimal(12, 2)
+  grandTotal        Decimal       @db.Decimal(12, 2)
+  paymentMethod     PaymentMethod
+  notes             String?
+
+  items         OrderItem[]
+  statusHistory OrderStatusHistory[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  createdBy String?   @db.Uuid
+  updatedBy String?   @db.Uuid
+  deletedBy String?   @db.Uuid
+
+  @@index([userId, status])
+  @@index([status])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                   String         @id @default(uuid()) @db.Uuid
+  orderId              String         @db.Uuid
+  order                Order          @relation(fields: [orderId], references: [id])
+  variantId            String         @db.Uuid
+  variant              ProductVariant @relation(fields: [variantId], references: [id])
+  productTitleSnapshot String
+  skuSnapshot          String
+  unitPrice            Decimal        @db.Decimal(12, 2)
+  quantity             Int
+  taxAmount            Decimal        @default(0) @db.Decimal(12, 2)
+  discountAmount       Decimal        @default(0) @db.Decimal(12, 2)
+  lineTotal            Decimal        @db.Decimal(12, 2)
+
+  @@index([orderId])
+  @@index([variantId])
+  @@map("order_items")
+}
+
+model OrderStatusHistory {
+  id      String      @id @default(uuid()) @db.Uuid
+  orderId String      @db.Uuid
+  order   Order       @relation(fields: [orderId], references: [id])
+  status  OrderStatus
+  note    String?
+  actorId String?     @db.Uuid
+
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+  @@map("order_status_histories")
+}
+
+// =========================================================================
+// CMS — Banners (Phase 7, pulled forward). HomepageSection/blog/pages etc. from
+// docs/06-PRISMA-SCHEMA.md are not modeled yet — only Banner, the piece actually needed now.
+// =========================================================================
+
+model Banner {
+  id        String         @id @default(uuid()) @db.Uuid
+  title     String
+  imagePath String
+  linkUrl   String?
+  position  BannerPosition
+  sortOrder Int            @default(0)
+  startsAt  DateTime?
+  endsAt    DateTime?
+  isActive  Boolean        @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  createdBy String?   @db.Uuid
+  updatedBy String?   @db.Uuid
+
+  @@index([position, isActive])
+  @@map("banners")
+}
