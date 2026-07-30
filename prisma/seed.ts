@@ -2,7 +2,6 @@ import 'dotenv/config';
 import { PrismaClient, type UserRole } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import * as bcrypt from 'bcrypt';
-import * as crypto from 'node:crypto';
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -195,39 +194,37 @@ async function seedRolesAndBundles(permissionCodes: string[]) {
 
 async function seedSuperAdmin() {
   console.log('Seeding Super Admin user...');
-  const email = process.env.SEED_SUPER_ADMIN_EMAIL ?? 'superadmin@example.com';
-  const existing = await prisma.user.findUnique({ where: { email } });
+  const email = process.env.SEED_SUPER_ADMIN_EMAIL ?? 'admin@gmail.com';
+  const defaultPassword = 'Admin@123456';
+  const passwordHash = await bcrypt.hash(
+    defaultPassword,
+    Number(process.env.BCRYPT_SALT_ROUNDS ?? 12),
+  );
 
-  if (existing) {
-    await prisma.user.update({
-      where: { id: existing.id },
-      data: { role: 'SUPER_ADMIN', status: 'ACTIVE' },
-    });
-    console.log(`  Super Admin already exists (${email}) — password left untouched.`);
-    return;
-  }
-
-  const rawPassword = crypto.randomBytes(12).toString('base64url');
-  const passwordHash = await bcrypt.hash(rawPassword, Number(process.env.BCRYPT_SALT_ROUNDS ?? 12));
-
-  await prisma.user.create({
-    data: {
+  await prisma.user.upsert({
+    where: { email },
+    update: {
+      passwordHash,
+      role: 'SUPER_ADMIN',
+      status: 'ACTIVE',
+      mustChangePassword: false,
+    },
+    create: {
       email,
       passwordHash,
       firstName: 'Super',
       lastName: 'Admin',
       role: 'SUPER_ADMIN',
       status: 'ACTIVE',
-      mustChangePassword: true,
+      mustChangePassword: false,
       emailVerifiedAt: new Date(),
     },
   });
 
   console.log('  =============================================================');
-  console.log('   SUPER ADMIN CREATED — save this password, it will not be shown again');
+  console.log('   SUPER ADMIN READY');
   console.log(`   Email:    ${email}`);
-  console.log(`   Password: ${rawPassword}`);
-  console.log('   Password change will be required on first login.');
+  console.log(`   Password: ${defaultPassword}`);
   console.log('  =============================================================');
 }
 
