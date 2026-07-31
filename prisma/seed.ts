@@ -64,10 +64,6 @@ function expand(codes: string[]): string[] {
   return [...result];
 }
 
-function allModulesExcept(exclude: string[]): string[] {
-  return MODULES.filter((m) => !exclude.includes(m.module)).map((m) => `${m.module}.*`);
-}
-
 interface RoleDef {
   name: UserRole;
   label: string;
@@ -84,42 +80,6 @@ const ROLE_DEFS: RoleDef[] = [
     description:
       'Full system access, including role/permission management and system settings.',
     bundle: [],
-  },
-  {
-    name: 'ADMIN',
-    label: 'Admin',
-    description: 'Full operational access except role/permission management.',
-    bundle: allModulesExcept(['roles', 'permissions']),
-  },
-  {
-    name: 'INVENTORY_MANAGER',
-    label: 'Inventory Manager',
-    description: 'Manages products, stock, warehouses, suppliers, and purchase orders.',
-    bundle: ['products.*', 'inventory.*', 'warehouses.*', 'suppliers.*', 'purchase-orders.*'],
-  },
-  {
-    name: 'SALES_MANAGER',
-    label: 'Sales Manager',
-    description: 'Manages coupons, offers, and flash sales; views orders and reports.',
-    bundle: ['orders.read', 'coupons.*', 'offers.*', 'flash-sales.*', 'reports.read'],
-  },
-  {
-    name: 'ORDER_MANAGER',
-    label: 'Order Manager',
-    description: 'Manages the order lifecycle, returns/exchanges, and shipping.',
-    bundle: ['orders.*', 'returns.*', 'shipping.read'],
-  },
-  {
-    name: 'CUSTOMER_SUPPORT',
-    label: 'Customer Support',
-    description: 'Views orders/customers, moderates reviews, issues limited refunds.',
-    bundle: ['orders.read', 'users.read', 'reviews.moderate', 'payments.refund'],
-  },
-  {
-    name: 'MARKETING',
-    label: 'Marketing',
-    description: 'Manages CMS content, banners, newsletter, SEO, and offers.',
-    bundle: ['cms.*', 'banners.*', 'newsletter.*', 'seo.*', 'offers.*'],
   },
   {
     name: 'CUSTOMER',

@@ -3,16 +3,7 @@ import type { UserRole, UserStatus } from '@prisma/client';
 import { IsIn, IsOptional } from 'class-validator';
 import { PaginationQueryDto } from '../../../common/dto/pagination-query.dto';
 
-const USER_ROLES: UserRole[] = [
-  'SUPER_ADMIN',
-  'ADMIN',
-  'INVENTORY_MANAGER',
-  'SALES_MANAGER',
-  'ORDER_MANAGER',
-  'CUSTOMER_SUPPORT',
-  'MARKETING',
-  'CUSTOMER',
-];
+const USER_ROLES: UserRole[] = ['SUPER_ADMIN', 'CUSTOMER'];
 
 const USER_STATUSES: UserStatus[] = [
   'ACTIVE',
