@@ -21,6 +21,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
+    "db:seed:product": "tsx prisma/seed-nuru-botanicz.ts",
     "db:studio": "prisma studio",
     "keys:generate": "node scripts/generate-jwt-keys.js"
   },

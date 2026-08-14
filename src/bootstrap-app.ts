@@ -21,7 +21,11 @@ export function configureApp(app: NestExpressApplication): {
   // Behind Nginx in production — without this, req.ip is the proxy's address, which would
   // break per-IP login rate limiting (docs/16-REDIS-PLAN.md §3).
   app.set('trust proxy', 1);
-  app.use(helmet());
+  // Default CORP (same-origin) blocks the storefront — a separate origin — from embedding
+  // <img> tags served from /uploads (e.g. product photos), even though CORS_ORIGINS already
+  // allows it; CORP is a distinct browser mechanism CORS headers don't satisfy. Uploads are
+  // public product/brand/category media meant to be embedded cross-origin by design.
+  app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(cookieParser());
   app.enableCors({
     origin: appConfig.corsOrigins,
